@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1.0">
 <title>Тьма и Свет</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+<script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 html,body{width:100%;height:100%;overflow:hidden;background:#06060f;font-family:'Segoe UI',Arial,sans-serif;color:#cfd2ff}
@@ -377,7 +377,7 @@ mkLv([
 /* ── State ──────────────────────────────────────────────────────────────────*/
 const S={
   screen:'menu',role:null,me:'light',other:'dark',
-  peer:null,conn:null,connected:false,
+  connected:false,
   level:0,deaths:0,
   gateOpen:{},leverToggle:{},
   movPlats:[],
@@ -403,59 +403,94 @@ addEventListener('keyup',e=>{
 /* ── Network ─────────────────────────────────────────────────────────────── */
 const $=id=>document.getElementById(id);
 const randCode=()=>{const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=a[Math.random()*a.length|0];return s;};
-const PFX='tmsv4-';
-// Reliable ICE servers: Google STUN + Open Relay TURN (free, no account needed)
-const ICE={config:{iceServers:[
+const ICE_CFG={iceServers:[
   {urls:'stun:stun.l.google.com:19302'},
   {urls:'stun:stun1.l.google.com:19302'},
   {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
   {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
   {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'},
-]}};
+]};
+const MQTT_URL='wss://broker.hivemq.com:8884/mqtt';
+const ROOM_PFX='tmsv5/';
+let _mqtt=null,_rtc=null,_dc=null,_pendingIce=[],_roomCode='';
+
 function setStatus(h){$('status').innerHTML=h;}
-function send(m){if(S.conn&&S.conn.open)try{S.conn.send(m);}catch(_){}}
+function send(m){if(_dc&&_dc.readyState==='open')try{_dc.send(JSON.stringify(m));}catch(_){}}
+
+function mqttConnect(cb){
+  _mqtt=mqtt.connect(MQTT_URL,{clientId:'ts_'+Math.random().toString(36).slice(2,10),clean:true,connectTimeout:12000,reconnectPeriod:0});
+  _mqtt.on('connect',cb);
+  _mqtt.on('error',e=>setStatus('MQTT ошибка. Обнови страницу.'));
+}
+function mqttPub(sub,obj){if(_mqtt)_mqtt.publish(ROOM_PFX+_roomCode+'/'+sub,JSON.stringify(obj),{qos:1});}
+function setupDC(dc){
+  _dc=dc;
+  dc.onopen=()=>{
+    S.connected=true;
+    if(S.role==='guest')send({t:'hi'});
+    else{send({t:'start',level:S.level});startGame();}
+  };
+  dc.onmessage=e=>onMsg(JSON.parse(e.data));
+  dc.onclose=()=>{S.connected=false;if(S.screen==='game')showBig('СВЯЗЬ ПОТЕРЯНА','Второй игрок отключился.\nОбнови страницу.');};
+}
+function startHostRTC(code){
+  _roomCode=code;
+  _rtc=new RTCPeerConnection({iceServers:ICE_CFG.iceServers});
+  setupDC(_rtc.createDataChannel('g',{ordered:true}));
+  _rtc.onicecandidate=e=>{if(e.candidate)mqttPub('ih',{c:e.candidate});};
+  _mqtt.subscribe(ROOM_PFX+code+'/ans');
+  _mqtt.subscribe(ROOM_PFX+code+'/ig');
+  _mqtt.on('message',(t,msg)=>{
+    const d=JSON.parse(msg.toString());
+    if(t.endsWith('/ans')){
+      _rtc.setRemoteDescription(new RTCSessionDescription(d.s)).then(()=>{
+        _pendingIce.forEach(c=>_rtc.addIceCandidate(c));_pendingIce=[];});
+    }else if(t.endsWith('/ig')){
+      if(_rtc.remoteDescription)_rtc.addIceCandidate(d.c);else _pendingIce.push(d.c);}
+  });
+  _rtc.createOffer().then(o=>_rtc.setLocalDescription(o).then(()=>mqttPub('off',{s:o})));
+}
+function startGuestRTC(code){
+  _roomCode=code;
+  _rtc=new RTCPeerConnection({iceServers:ICE_CFG.iceServers});
+  _rtc.ondatachannel=e=>setupDC(e.channel);
+  _rtc.onicecandidate=e=>{if(e.candidate)mqttPub('ig',{c:e.candidate});};
+  _mqtt.subscribe(ROOM_PFX+code+'/off');
+  _mqtt.subscribe(ROOM_PFX+code+'/ih');
+  _mqtt.on('message',(t,msg)=>{
+    const d=JSON.parse(msg.toString());
+    if(t.endsWith('/off')){
+      _rtc.setRemoteDescription(new RTCSessionDescription(d.s))
+        .then(()=>_rtc.createAnswer())
+        .then(a=>_rtc.setLocalDescription(a).then(()=>mqttPub('ans',{s:a})));
+    }else if(t.endsWith('/ih')){
+      if(_rtc.remoteDescription)_rtc.addIceCandidate(d.c);else _pendingIce.push(d.c);}
+  });
+}
 
 $('btnHost').onclick=()=>{
   const code=randCode();
-  setStatus('Создаю комнату…');
-  const peer=new Peer(PFX+code.toLowerCase(),ICE);
-  S.peer=peer;S.role='host';S.me='light';S.other='dark';
-  peer.on('open',()=>{
+  setStatus('Подключаюсь…');
+  S.role='host';S.me='light';S.other='dark';
+  mqttConnect(()=>{
+    startHostRTC(code.toLowerCase());
     setStatus(`Код комнаты:<br><span id="roomCode">${code}</span><br>Отправь второму игроку и жди…`);
     $('btnHost').style.display=$('btnJoinShow').style.display=$('joinRow').style.display='none';
   });
-  peer.on('connection',c=>{if(S.conn){c.close();return;}bindConn(c);});
-  peer.on('error',e=>setStatus('Ошибка: '+e.type+'. Обнови страницу.'));
 };
 $('btnJoinShow').onclick=()=>{$('joinRow').style.display='flex';$('codeInput').focus();};
 $('btnJoin').onclick=joinGame;
-$('btnSolo').onclick=()=>{
-  S.role='solo';S.me='light';S.other='dark';S.connected=true;
-  startGame();
-};
+$('btnSolo').onclick=()=>{S.role='solo';S.me='light';S.other='dark';S.connected=true;startGame();};
 $('codeInput').addEventListener('keydown',e=>{if(e.key==='Enter')joinGame();});
 function joinGame(){
   const code=$('codeInput').value.trim().toLowerCase();
   if(code.length<4){setStatus('Введи 5-значный код.');return;}
   setStatus('Подключаюсь…');
-  const peer=new Peer(ICE);
-  S.peer=peer;S.role='guest';S.me='dark';S.other='light';
-  peer.on('open',()=>{
-    const c=peer.connect(PFX+code,{reliable:true,config:ICE.config});
-    bindConn(c);
-    setTimeout(()=>{if(!S.connected)setStatus('Не удалось. Проверь код.');},15000);
+  S.role='guest';S.me='dark';S.other='light';
+  mqttConnect(()=>{
+    startGuestRTC(code);
+    setTimeout(()=>{if(!S.connected)setStatus('Не удалось. Проверь код или обнови страницу.');},20000);
   });
-  peer.on('error',e=>setStatus('Ошибка: '+e.type));
-}
-function bindConn(c){
-  S.conn=c;
-  c.on('open',()=>{
-    S.connected=true;
-    if(S.role==='guest')send({t:'hi'});
-    else{send({t:'start',level:S.level});startGame();}
-  });
-  c.on('data',onMsg);
-  c.on('close',()=>{S.connected=false;if(S.screen==='game')showBig('СВЯЗЬ ПОТЕРЯНА','Второй игрок отключился.\nОбнови страницу.');});
 }
 function onMsg(m){
   switch(m.t){
