@@ -1,0 +1,900 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1.0">
+<title>Тьма и Свет</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/peerjs/1.5.2/peerjs.min.js"></script>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:100%;height:100%;overflow:hidden;background:#06060f;font-family:'Segoe UI',Arial,sans-serif;color:#cfd2ff}
+body{display:flex;align-items:center;justify-content:center}
+#menu{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;
+  background:radial-gradient(ellipse at 30% 20%,#14142e 0%,#06060f 60%);z-index:10;gap:16px}
+#menu h1{font-size:58px;letter-spacing:6px;text-align:center;
+  background:linear-gradient(90deg,#b265ff 0%,#7a7aff 45%,#ffd966 55%,#ffb84d 100%);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  filter:drop-shadow(0 0 22px rgba(150,100,255,.4))}
+.sub{color:#7d80b8;font-size:14px;text-align:center;line-height:1.8;margin-bottom:8px}
+.btn{background:rgba(120,90,255,.10);border:1px solid #6a5cff;color:#dcdcff;
+  padding:13px 44px;font-size:18px;border-radius:10px;cursor:pointer;letter-spacing:1px;
+  transition:all .18s;min-width:300px;text-align:center}
+.btn:hover{background:rgba(140,110,255,.25);box-shadow:0 0 24px rgba(120,90,255,.45);transform:translateY(-1px)}
+.btn.gold{border-color:#d9a93e;color:#ffe9b0;background:rgba(255,200,80,.08)}
+.btn.gold:hover{background:rgba(255,200,80,.18);box-shadow:0 0 24px rgba(255,190,70,.4)}
+#joinRow{display:none;gap:10px;align-items:center}
+#codeInput{background:#0d0d22;border:1px solid #6a5cff;color:#fff;font-size:22px;letter-spacing:6px;
+  padding:11px 14px;border-radius:10px;width:210px;text-align:center;text-transform:uppercase;outline:none}
+#status{min-height:56px;text-align:center;font-size:16px;color:#9fa3e8;line-height:1.7}
+#roomCode{font-size:40px;letter-spacing:10px;color:#ffd966;text-shadow:0 0 18px rgba(255,210,90,.6);font-weight:bold}
+#hint{position:absolute;bottom:18px;color:#505480;font-size:12px;text-align:center;line-height:1.9}
+#gameWrap{position:relative;display:none}
+canvas{display:block}
+#hud{position:absolute;top:6px;left:10px;right:10px;display:flex;justify-content:space-between;
+  font-size:13px;color:#aab;pointer-events:none}
+#hud .lv{color:#e8e9ff;font-size:14px;letter-spacing:1px}
+#bigMsg{position:absolute;inset:0;display:none;align-items:center;justify-content:center;
+  flex-direction:column;gap:16px;background:rgba(4,4,12,.8);border-radius:4px;text-align:center}
+#bigMsg .t1{font-size:46px;letter-spacing:4px;color:#ffe9b0;text-shadow:0 0 28px rgba(255,200,80,.6)}
+#bigMsg .t2{font-size:16px;color:#9fa3e8;line-height:1.8;white-space:pre-line}
+</style>
+</head>
+<body>
+<div id="menu">
+  <h1>ТЬМА &nbsp;и&nbsp; СВЕТ</h1>
+  <div class="sub">Кооперативный платформер для двоих — онлайн.<br>
+  Свет гибнет во тьме, Тьма сгорает в свете.<br>Пройдите 15 уровней вместе.</div>
+  <button class="btn gold" id="btnHost">⚜ Создать игру (ты — Свет)</button>
+  <button class="btn" id="btnJoinShow">◆ Присоединиться (ты — Тьма)</button>
+  <div id="joinRow">
+    <input id="codeInput" maxlength="5" placeholder="КОД">
+    <button class="btn" id="btnJoin" style="min-width:150px">Войти</button>
+  </div>
+  <button class="btn" id="btnSolo" style="font-size:14px;opacity:.75;min-width:220px;padding:9px 24px">🎮 Соло / тест (1 игрок)</button>
+  <div id="status"></div>
+  <div id="hint">A/D или ←/→ — движение &nbsp;|&nbsp; W / ↑ / Пробел — прыжок &nbsp;|&nbsp; R — перезапуск<br>
+  Кнопка ⊙ держит ворота &nbsp;·&nbsp; Рычаг ⊗ переключает ворота &nbsp;·&nbsp; Дойдите ОБА до своих дверей</div>
+</div>
+<div id="gameWrap">
+  <canvas id="cv" width="1280" height="736"></canvas>
+  <div id="hud">
+    <div><div class="lv" id="hudLv"></div><div id="hudRole"></div></div>
+    <div style="text-align:right"><div id="hudDeaths"></div><div id="hudPing"></div></div>
+  </div>
+  <div id="bigMsg"><div class="t1" id="bm1"></div><div class="t2" id="bm2"></div></div>
+</div>
+<script>
+'use strict';
+const T=32,GW=40,GH=23,GRAV=0.54,MAXFALL=14,RUN=4.4,ACC=0.65,FRICT=0.72,JUMP=-12.2;
+const PW=18,PH=38;
+
+/* ── Level builder ──────────────────────────────────────────────────────────
+   ops: [char, x1, y1, x2=x1, y2=y1]  fills rectangle in grid
+   Tile chars: # solid  . air  W light-only  V dark-only
+               l light-spawn  d dark-spawn  E light-exit  X dark-exit
+               T spike-both  Q spike-kills-light  Z spike-kills-dark
+               1-9 gate tile (solid=closed, passable=open)
+*/
+function mkLv(ops,hint,objs=[]){
+  const g=Array.from({length:GH},()=>Array(GW).fill('.'));
+  for(let x=0;x<GW;x++){g[0][x]='#';g[GH-1][x]='#';}
+  for(let y=0;y<GH;y++){g[y][0]='#';g[y][GW-1]='#';}
+  for(const op of ops){
+    const[c,x1,y1,x2=x1,y2=y1]=op;
+    for(let y=y1;y<=y2;y++)for(let x=x1;x<=x2;x++)
+      if(x>=0&&x<GW&&y>=0&&y<GH)g[y][x]=c;
+  }
+  const rows=g.map(r=>r.join(''));
+  let ls={x:3,y:2},ds={x:36,y:2};
+  for(let y=0;y<GH;y++)for(let x=0;x<GW;x++){
+    if(rows[y][x]==='l')ls={x,y};
+    if(rows[y][x]==='d')ds={x,y};
+  }
+  return{rows,lspawn:ls,dspawn:ds,objs,hint};
+}
+
+const LEVELS=[
+// 0 ── Пробуждение ── tutorial ───────────────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],            // floor
+  ['#',1,14,13,14],            // left mid platform
+  ['#',1,10,9,10],             // left upper
+  ['#',26,14,38,14],           // right mid platform
+  ['#',30,10,38,10],           // right upper
+  ['#',16,7,23,7],             // center bridge
+  ['l',4,9],['d',35,9],
+  ['E',3,17],['X',36,17],
+],'Прыгайте по платформам! Свет (⚜) — к золотой двери, Тьма (◆) — к фиолетовой.'),
+
+// 1 ── Золотые мосты ── light-only platforms ─────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['#',18,3,18,17],            // dividing wall
+  ['#',1,13,9,13],
+  ['#',1,8,5,8],
+  ['W',10,13,17,13],           // light bridge over wall (W=light-only)
+  ['W',10,8,17,8],
+  ['#',20,14,38,14],
+  ['#',30,10,38,10],
+  ['l',3,17],['d',36,17],
+  ['E',3,7],['X',36,9],
+],'Золотые мосты (W) проходимы только для Света. Тьма — ищи другой путь!'),
+
+// 2 ── Фиолетовые пути ── dark-only platforms ────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['#',21,3,21,17],
+  ['#',29,13,38,13],
+  ['#',33,8,38,8],
+  ['V',2,13,20,13],            // dark bridge (V=dark-only)
+  ['V',2,8,20,8],
+  ['#',1,14,10,14],
+  ['#',1,9,6,9],
+  ['l',35,17],['d',4,17],
+  ['E',36,7],['X',3,9],
+],'Фиолетовые мосты (V) — только для Тьмы. Свет — ищи свой путь!'),
+
+// 3 ── Ключ и замок ── cross-help buttons ────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['#',19,3,19,15],
+  // gate 1 blocks left exit path; dark presses button to open
+  ['1',3,14,3,17],
+  // gate 2 blocks right exit path; light presses button to open
+  ['2',36,14,36,17],
+  // platforms
+  ['#',1,12,10,12],['#',5,8,10,8],
+  ['#',29,12,38,12],['#',29,8,34,8],
+  ['l',4,17],['d',35,17],
+  ['E',3,17],['X',36,17],
+  // platform under buttons so players can reach
+  ['#',30,13,32,13],['#',7,13,9,13],
+],'Жмите кнопки ⊙ чтобы открыть путь ДРУГОМУ игроку — не себе!',
+[{t:'b',x:31,y:12,g:'1'},{t:'b',x:8,y:12,g:'2'}]),
+
+// 4 ── Одновременно ── simultaneous buttons ───────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  // gate 1 blocks the center path (both buttons needed)
+  ['1',15,5,24,15],
+  ['#',1,13,13,13],['#',26,13,38,13],
+  ['#',1,8,7,8],['#',32,8,38,8],
+  ['l',3,17],['d',36,17],
+  ['E',3,4],['X',36,4],
+],'ОБА нажмите свои кнопки ОДНОВРЕМЕННО — иначе ворота не откроются!',
+[{t:'b',x:6,y:12,g:'1',a:1},{t:'b',x:33,y:12,g:'1',a:1}]),
+
+// 5 ── Шипы ── spikes intro ───────────────────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  // spike pits in floor
+  ['T',6,18,9,18],['T',15,18,18,18],['T',25,18,28,18],['T',33,18,36,18],
+  // platforms over spikes
+  ['#',1,15,5,15],['#',10,15,14,15],['#',19,15,24,15],['#',29,15,32,15],['#',37,15,38,15],
+  // upper platforms
+  ['#',1,11,6,11],['#',10,9,16,9],['#',21,7,28,7],['#',32,9,38,9],
+  // spike walls in upper area
+  ['T',7,11,9,11],['T',17,9,19,9],['T',29,9,31,9],
+  ['l',2,17],['d',37,17],
+  ['E',2,10],['X',37,10],
+],'Шипы ▲ убивают обоих. Прыгайте ТОЧНО — нет права на ошибку!'),
+
+// 6 ── Избирательные шипы ── Q and Z traps ───────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['#',19,5,19,18],            // divider
+  // left side: Q spikes (kill LIGHT, dark walks freely)
+  ['Q',2,18,17,18],            // Q floor left
+  ['#',1,18,4,18],             // small safe solid patches
+  ['#',8,18,8,18],
+  ['#',1,14,7,14],['Q',2,14,6,14],// Q on platforms
+  ['#',2,10,6,10],
+  // right side: Z spikes (kill DARK, light walks freely)
+  ['Z',21,18,38,18],
+  ['#',35,18,38,18],
+  ['#',32,14,38,14],['Z',33,14,37,14],
+  ['#',33,10,38,10],
+  ['l',36,17],['d',3,17],      // swapped: light in dark-safe zone
+  ['E',36,9],['X',3,9],
+],'Q-шипы убивают только Свет! Z-шипы убивают только Тьму! Обменяйтесь путями!'),
+
+// 7 ── Движущиеся платформы ── moving platforms ──────────────────────────────
+mkLv([
+  ['T',1,19,38,19],            // spike floor
+  ['#',1,20,38,21],
+  ['#',1,3,6,3],               // exit ledges
+  ['#',33,3,38,3],
+  ['#',1,15,5,15],             // start ledges
+  ['#',34,15,38,15],
+  ['l',3,14],['d',36,14],
+  ['E',3,2],['X',36,2],
+],'Движущиеся платформы над смертельным полом. Прыгайте вовремя!',
+[
+  {t:'m',x1:6,y1:12,x2:22,y2:12,s:1.4},
+  {t:'m',x1:16,y1:7,x2:33,y2:7,s:1.7},
+  {t:'m',x1:8,y1:16,x2:26,y2:16,s:2.0},
+  {t:'m',x1:20,y1:9,x2:36,y2:9,s:1.2},
+  {t:'m',x1:5,y1:5,x2:18,y2:5,s:1.5},
+]),
+
+// 8 ── Рычаги ── lever chain ──────────────────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  // three gate columns
+  ['1',10,3,10,14],
+  ['2',20,3,20,14],
+  ['3',30,3,30,14],
+  // floor sections
+  ['#',1,14,9,14],['#',11,14,19,14],['#',21,14,29,14],['#',31,14,38,14],
+  // upper platforms
+  ['#',1,9,8,9],['#',12,9,18,9],['#',22,9,28,9],['#',32,9,38,9],
+  ['l',3,17],['d',36,17],
+  ['E',3,2],['X',36,2],
+],'Рычаги ⊗ переключают ворота. Найдите правильный маршрут!',
+[{t:'l',x:5,y:17,g:'1'},{t:'l',x:15,y:17,g:'2'},{t:'l',x:25,y:17,g:'3'}]),
+
+// 9 ── Восхождение ── vertical climb ─────────────────────────────────────────
+mkLv([
+  ['T',1,20,38,20],
+  ['#',1,21,38,21],
+  ['#',1,3,6,3],['#',33,3,38,3],
+  ['l',3,19],['d',36,19],
+  ['E',3,2],['X',36,2],
+],'Поднимайтесь на движущихся платформах! Шипы внизу не прощают.',
+[
+  {t:'m',x1:2,y1:17,x2:2,y2:5,s:0.9},
+  {t:'m',x1:8,y1:18,x2:8,y2:6,s:1.2},
+  {t:'m',x1:14,y1:16,x2:14,y2:5,s:1.5},
+  {t:'m',x1:20,y1:17,x2:20,y2:4,s:1.8},
+  {t:'m',x1:26,y1:15,x2:26,y2:5,s:1.3},
+  {t:'m',x1:32,y1:16,x2:32,y2:4,s:1.0},
+  {t:'m',x1:5,y1:12,x2:5,y2:3,s:2.0},
+  {t:'m',x1:11,y1:10,x2:11,y2:3,s:1.6},
+  {t:'m',x1:23,y1:11,x2:23,y2:3,s:1.4},
+  {t:'m',x1:35,y1:13,x2:35,y2:3,s:0.8},
+]),
+
+// 10 ── Переплетение ── W+V maze ─────────────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['#',19,5,19,18],
+  ['#',1,13,10,13],['W',4,9,15,9],
+  ['#',1,5,7,5],
+  ['#',28,13,38,13],['V',24,9,36,9],
+  ['#',32,5,38,5],
+  ['W',8,6,17,6],['V',22,6,31,6],
+  ['l',3,17],['d',36,17],
+  ['E',3,4],['X',36,4],
+],'W-мосты только для Света, V-мосты только для Тьмы. Помогайте друг другу!'),
+
+// 11 ── Синхрон ── sync buttons + hazards ────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['#',13,3,13,15],['#',26,3,26,15],
+  // zone hazards
+  ['Q',2,18,12,18],['Z',27,18,38,18],
+  // override floor to solid
+  ['#',1,18,38,18],['Q',2,17,5,17],['Z',34,17,37,17],
+  // gate across center top
+  ['1',14,3,25,3],
+  // platforms
+  ['#',1,11,11,11],['#',28,11,38,11],
+  ['#',14,8,25,8],
+  ['l',3,17],['d',36,17],
+  ['E',3,2],['X',36,2],
+],'Обе кнопки нужны одновременно! Избегайте ловушек своей зоны.',
+[{t:'b',x:5,y:10,g:'1',a:1},{t:'b',x:34,y:10,g:'1',a:1},
+ {t:'m',x1:14,y1:6,x2:25,y2:6,s:1.6}]),
+
+// 12 ── Цепочка ── gate chain + movers ───────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['T',4,18,8,18],['T',30,18,34,18],
+  // three sequential gates
+  ['1',9,5,9,14],['2',19,5,19,14],['3',29,5,29,14],
+  ['#',1,13,8,13],['#',10,13,18,13],['#',20,13,28,13],['#',30,13,38,13],
+  ['#',1,9,6,9],['#',14,7,17,7],['#',22,7,26,7],['#',33,9,38,9],
+  ['l',3,17],['d',36,17],
+  ['E',3,4],['X',36,4],
+],'Три замка. Каждый рычаг открывает путь к следующему!',
+[{t:'l',x:3,y:12,g:'1'},{t:'l',x:14,y:12,g:'2'},{t:'l',x:24,y:12,g:'3'},
+ {t:'m',x1:10,y1:5,x2:18,y2:5,s:1.4},{t:'m',x1:20,y1:5,x2:28,y2:5,s:1.7}]),
+
+// 13 ── Прецизионный ── precision + both traps ────────────────────────────────
+mkLv([
+  ['T',1,20,38,20],
+  ['#',1,21,38,21],
+  // stepping stones (very small platforms)
+  ['#',1,17,3,17],['#',7,15,9,15],['#',13,13,15,13],
+  ['#',19,11,21,11],['#',25,9,27,9],['#',31,7,33,7],['#',36,5,38,5],
+  // return path
+  ['#',35,17,38,17],['#',29,15,31,15],['#',23,13,25,13],
+  ['#',17,11,19,11],['#',11,9,13,9],['#',5,7,7,7],['#',1,5,3,5],
+  // selective spikes on platforms
+  ['Q',8,14,8,14],['Q',14,12,14,12],['Q',20,10,20,10],
+  ['Z',25,8,25,8],['Z',30,6,30,6],['Z',35,4,35,4],
+  ['l',2,16],['d',37,16],
+  ['E',2,4],['X',37,4],
+],'Крошечные платформы над пропастью. Одно неверное движение — смерть!'),
+
+// 14 ── Всё сразу ── everything combined ─────────────────────────────────────
+mkLv([
+  ['#',1,18,38,18],
+  ['T',8,18,12,18],['T',26,18,30,18],
+  // left wall with gate 1
+  ['1',6,5,6,14],
+  // right wall with gate 2
+  ['2',33,5,33,14],
+  // platforms left
+  ['#',1,13,5,13],['#',1,9,5,9],
+  ['Q',2,13,4,13],             // Q spike on left mid platform
+  // platforms right
+  ['#',34,13,38,13],['#',34,9,38,9],
+  ['Z',35,13,37,13],           // Z spike on right mid platform
+  // center section
+  ['#',13,8,26,8],
+  ['3',15,3,24,5],             // gate 3 blocks top
+  ['T',13,8,14,8],['T',25,8,26,8], // spikes at edges of center
+  ['#',13,12,14,12],['#',25,12,26,12],
+  ['l',3,17],['d',36,17],
+  ['E',3,2],['X',36,2],
+],'Рычаги + кнопки + шипы + платформы. Только вдвоём — к свободе!',
+[{t:'l',x:3,y:12,g:'1'},{t:'l',x:36,y:12,g:'2'},
+ {t:'b',x:15,y:7,g:'3',a:1},{t:'b',x:24,y:7,g:'3',a:1},
+ {t:'m',x1:7,y1:6,x2:7,y2:2,s:1.5},{t:'m',x1:32,y1:6,x2:32,y2:2,s:1.5},
+ {t:'m',x1:14,y1:10,x2:25,y2:10,s:2.0}]),
+
+// 15 ── Финал: Единство ── final gauntlet ─────────────────────────────────────
+mkLv([
+  ['T',1,20,38,20],['#',1,21,38,21],
+  // Starting platforms bottom
+  ['#',1,17,5,17],['#',34,17,38,17],
+  // Phase 1: Q and Z traps, must cross carefully
+  ['Q',6,17,12,17],['Z',27,17,33,17],
+  // safe islands
+  ['#',13,17,16,17],['#',23,17,26,17],
+  // Gate 1 in center: both buttons required
+  ['1',17,13,22,19],
+  // Phase 2: upper section with movers
+  ['#',1,12,6,12],['#',33,12,38,12],
+  // Gate 2: levers
+  ['2',10,7,10,11],['2',29,7,29,11],
+  // Phase 3: final gate at top
+  ['3',15,3,24,3],
+  ['#',1,4,8,4],['#',31,4,38,4],
+  // Spikes inside phase 3 gate
+  ['Q',15,5,19,5],['Z',20,5,24,5],
+  ['l',3,16],['d',36,16],
+  ['E',3,2],['X',36,2],
+],'ФИНАЛ: фазы нарастают. Синхрон, точность, кооперация. Вы можете это!',
+[{t:'b',x:15,y:16,g:'1',a:1},{t:'b',x:23,y:16,g:'1',a:1},
+ {t:'l',x:4,y:11,g:'2'},{t:'l',x:35,y:11,g:'2'},
+ {t:'b',x:17,y:2,g:'3',a:1},{t:'b',x:22,y:2,g:'3',a:1},
+ {t:'m',x1:7,y1:9,x2:7,y2:4,s:1.2},{t:'m',x1:32,y1:9,x2:32,y2:4,s:1.2},
+ {t:'m',x1:11,y1:15,x2:28,y2:15,s:2.4},{t:'m',x1:12,y1:5,x2:27,y2:5,s:1.8}])
+];
+
+/* ── State ──────────────────────────────────────────────────────────────────*/
+const S={
+  screen:'menu',role:null,me:'light',other:'dark',
+  peer:null,conn:null,connected:false,
+  level:0,deaths:0,
+  gateOpen:{},leverToggle:{},
+  movPlats:[],
+  P:{},L:null,
+  atExit:{light:false,dark:false},
+  atExitLatch:{light:false,dark:false},
+  win:false,transitioning:false,ping:0,
+};
+const keys={l:false,r:false,j:false,jPress:false};
+addEventListener('keydown',e=>{
+  if(e.repeat)return;
+  if(['ArrowLeft','KeyA'].includes(e.code))keys.l=true;
+  if(['ArrowRight','KeyD'].includes(e.code))keys.r=true;
+  if(['ArrowUp','KeyW','Space'].includes(e.code)){keys.j=true;keys.jPress=true;e.preventDefault();}
+  if(e.code==='KeyR'&&S.screen==='game')requestRestart();
+});
+addEventListener('keyup',e=>{
+  if(['ArrowLeft','KeyA'].includes(e.code))keys.l=false;
+  if(['ArrowRight','KeyD'].includes(e.code))keys.r=false;
+  if(['ArrowUp','KeyW','Space'].includes(e.code))keys.j=false;
+});
+
+/* ── Network ─────────────────────────────────────────────────────────────── */
+const $=id=>document.getElementById(id);
+const randCode=()=>{const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=a[Math.random()*a.length|0];return s;};
+const PFX='tmsv3-';
+function setStatus(h){$('status').innerHTML=h;}
+function send(m){if(S.conn&&S.conn.open)try{S.conn.send(m);}catch(_){}}
+
+$('btnHost').onclick=()=>{
+  const code=randCode();
+  setStatus('Создаю комнату…');
+  const peer=new Peer(PFX+code.toLowerCase());
+  S.peer=peer;S.role='host';S.me='light';S.other='dark';
+  peer.on('open',()=>{
+    setStatus(`Код комнаты:<br><span id="roomCode">${code}</span><br>Отправь второму игроку и жди…`);
+    $('btnHost').style.display=$('btnJoinShow').style.display=$('joinRow').style.display='none';
+  });
+  peer.on('connection',c=>{if(S.conn){c.close();return;}bindConn(c);});
+  peer.on('error',e=>setStatus('Ошибка: '+e.type+'. Обнови страницу.'));
+};
+$('btnJoinShow').onclick=()=>{$('joinRow').style.display='flex';$('codeInput').focus();};
+$('btnJoin').onclick=joinGame;
+$('btnSolo').onclick=()=>{
+  S.role='solo';S.me='light';S.other='dark';S.connected=true;
+  startGame();
+};
+$('codeInput').addEventListener('keydown',e=>{if(e.key==='Enter')joinGame();});
+function joinGame(){
+  const code=$('codeInput').value.trim().toLowerCase();
+  if(code.length<4){setStatus('Введи 5-значный код.');return;}
+  setStatus('Подключаюсь…');
+  const peer=new Peer();
+  S.peer=peer;S.role='guest';S.me='dark';S.other='light';
+  peer.on('open',()=>{
+    const c=peer.connect(PFX+code,{reliable:true});
+    bindConn(c);
+    setTimeout(()=>{if(!S.connected)setStatus('Не удалось. Проверь код.');},9000);
+  });
+  peer.on('error',e=>setStatus('Ошибка: '+e.type));
+}
+function bindConn(c){
+  S.conn=c;
+  c.on('open',()=>{
+    S.connected=true;
+    if(S.role==='guest')send({t:'hi'});
+    else{send({t:'start',level:S.level});startGame();}
+  });
+  c.on('data',onMsg);
+  c.on('close',()=>{S.connected=false;if(S.screen==='game')showBig('СВЯЗЬ ПОТЕРЯНА','Второй игрок отключился.\nОбнови страницу.');});
+}
+function onMsg(m){
+  switch(m.t){
+    case 'hi':send({t:'start',level:S.level});startGame();break;
+    case 'start':S.level=m.level;startGame();break;
+    case 'p':{const o=S.P[S.other];if(!o)break;o.tx=m.x;o.ty=m.y;o.face=m.f;o.seen=true;break;}
+    case 'st':if(S.role==='guest'){S.gateOpen=m.go;S.leverToggle=m.lt;S.deaths=m.d;
+      m.mp.forEach((p,i)=>{if(S.movPlats[i]){S.movPlats[i].cx=p.x;S.movPlats[i].cy=p.y;}});}break;
+    case 'exit':S.atExitLatch[m.role]=true;break;
+    case 'lever':if(S.role==='host')toggleLever(m.id);break;
+    case 'dead':if(S.role==='host')doDeath();break;
+    case 'restart':if(S.role==='host')doDeath();break;
+    case 'next':S.level=m.level;loadLevel();showBanner();break;
+    case 'win':doWin();break;
+    case 'png':send({t:'pong',ts:m.ts});break;
+    case 'pong':S.ping=Math.round(performance.now()-m.ts);break;
+  }
+}
+function requestRestart(){if(S.transitioning||S.win)return;if(S.role==='host')doDeath();else send({t:'restart'});}
+setInterval(()=>{if(S.connected)send({t:'png',ts:performance.now()});},2500);
+
+/* ── Game flow ───────────────────────────────────────────────────────────── */
+function startGame(){
+  S.screen='game';$('menu').style.display='none';$('gameWrap').style.display='block';
+  loadLevel();showBanner();loop();
+}
+function loadLevel(){
+  S.L=LEVELS[S.level];
+  S.gateOpen={};S.leverToggle={};S._leverTouched={};
+  S.atExit={light:false,dark:false};
+  S.atExitLatch={light:false,dark:false};
+  S.transitioning=false;
+  $('bigMsg').style.display='none';
+  S.movPlats=(S.L.objs||[]).filter(o=>o.t==='m').map(o=>({
+    x1:o.x1,y1:o.y1,x2:o.x2,y2:o.y2,s:o.s,
+    cx:o.x1*T,cy:o.y1*T,fwd:true,w:3*T,h:T/2
+  }));
+  const ls=S.L.lspawn,ds=S.L.dspawn;
+  spawnP('light',ls.x*T+T/2-PW/2,ls.y*T+T-PH);
+  spawnP('dark',ds.x*T+T/2-PW/2,ds.y*T+T-PH);
+  updateHUD();
+}
+function spawnP(role,px,py){
+  S.P[role]={x:px,y:py,vx:0,vy:0,face:1,onGround:false,
+    tx:px,ty:py,seen:false,onPlat:-1,role};
+}
+function doDeath(){
+  if(S.transitioning)return;
+  S.deaths++;
+  flashBig('💀 СМЕРТЬ…','Возрождение…');
+  setTimeout(()=>{loadLevel();if(S.connected)send({t:'reset'});},900);
+}
+function nextLevel(){
+  if(S.transitioning)return;S.transitioning=true;
+  if(S.level>=LEVELS.length-1){if(S.role==='host')send({t:'win'});doWin();return;}
+  S.level++;
+  flashBig('✨ УРОВЕНЬ ПРОЙДЕН!','Следующий уровень…');
+  setTimeout(()=>{if(S.role==='host')send({t:'next',level:S.level});loadLevel();showBanner();},1600);
+}
+function doWin(){S.win=true;showBig('🌟 ПОБЕДА!','Вы прошли все 15 уровней!\nТьма и Свет едины. Вы свободны. ✨');}
+function showBig(t1,t2){$('bm1').textContent=t1;$('bm2').textContent=t2;$('bigMsg').style.display='flex';}
+function flashBig(t1,t2){showBig(t1,t2);setTimeout(()=>$('bigMsg').style.display='none',800);}
+function showBanner(){const n=S.level+1,h=S.L.hint||'';showBig(`Уровень ${n} / 15`,h);setTimeout(()=>$('bigMsg').style.display='none',3200);}
+function updateHUD(){
+  $('hudLv').textContent=`Уровень ${S.level+1} / 15`;
+  $('hudRole').textContent=S.me==='light'?'⚜ Свет':'◆ Тьма';
+  $('hudRole').style.color=S.me==='light'?'#ffd966':'#b265ff';
+  $('hudDeaths').textContent=`💀 ${S.deaths}`;
+  $('hudPing').textContent=S.connected?`${S.ping}ms`:'';
+}
+
+/* ── Tiles ───────────────────────────────────────────────────────────────── */
+function tileAt(tx,ty){
+  if(tx<0||tx>=GW||ty<0||ty>=GH)return '#';
+  return S.L.rows[ty][tx];
+}
+function isGate(c){return c>='1'&&c<='9';}
+function isSolid(tx,ty,role){
+  if(tx<0||tx>=GW||ty<0||ty>=GH)return true;
+  const c=tileAt(tx,ty);
+  if(c==='#')return true;
+  if(c==='W')return role==='light';
+  if(c==='V')return role==='dark';
+  if(isGate(c))return!S.gateOpen[c];
+  return false;
+}
+
+/* ── Physics ─────────────────────────────────────────────────────────────── */
+function moveAxis(p,axis,delta){
+  const role=p.role;
+  if(axis==='x'){
+    p.x+=delta;
+    const l=Math.floor(p.x/T),r=Math.floor((p.x+PW-1)/T);
+    const yt=Math.floor(p.y/T),yb=Math.floor((p.y+PH-1)/T);
+    for(let ty=yt;ty<=yb;ty++){
+      if(delta>0&&isSolid(r,ty,role)){p.x=r*T-PW-0.01;p.vx=0;break;}
+      if(delta<0&&isSolid(l,ty,role)){p.x=(l+1)*T+0.01;p.vx=0;break;}
+    }
+  }else{
+    p.y+=delta;
+    const t2=Math.floor(p.y/T),b2=Math.floor((p.y+PH-1)/T);
+    const xl=Math.floor(p.x/T),xr=Math.floor((p.x+PW-1)/T);
+    p.onGround=false;
+    for(let tx=xl;tx<=xr;tx++){
+      if(delta>0&&isSolid(tx,b2,role)){p.y=b2*T-PH-0.01;p.vy=0;p.onGround=true;break;}
+      if(delta<0&&isSolid(tx,t2,role)){p.y=(t2+1)*T+0.01;p.vy=0;break;}
+    }
+  }
+}
+function updatePhysics(p){
+  // moving platform attachment
+  p.onPlat=-1;
+  for(let i=0;i<S.movPlats.length;i++){
+    const pl=S.movPlats[i];
+    if(p.x+PW>pl.cx&&p.x<pl.cx+pl.w&&p.y+PH>=pl.cy-2&&p.y+PH<=pl.cy+6&&p.vy>=0){
+      p.onGround=true;p.onPlat=i;p.y=pl.cy-PH;p.vy=0;
+    }
+  }
+  const tv=(keys.l?-1:0)+(keys.r?1:0);
+  p.vx+=(tv*RUN-p.vx)*ACC;
+  if(tv===0)p.vx*=FRICT;
+  if(Math.abs(p.vx)<0.05)p.vx=0;
+  if(tv>0)p.face=1;else if(tv<0)p.face=-1;
+  if(keys.jPress){if(p.onGround){p.vy=JUMP;p.onGround=false;}keys.jPress=false;}
+  p.vy=Math.min(p.vy+GRAV,MAXFALL);
+  if(p.onPlat>=0){
+    const pl=S.movPlats[p.onPlat];
+    const dx=(pl.x2-pl.x1),dy=(pl.y2-pl.y1);
+    const len=Math.sqrt(dx*dx+dy*dy)||1;
+    p.x+=(pl.fwd?1:-1)*dx/len*pl.s;
+    p.y+=(pl.fwd?1:-1)*dy/len*pl.s;
+  }
+  moveAxis(p,'x',p.vx);
+  moveAxis(p,'y',p.vy);
+  if(p.x<0){p.x=0;p.vx=0;}
+  if(p.x+PW>GW*T){p.x=GW*T-PW;p.vx=0;}
+}
+
+/* ── Objects ─────────────────────────────────────────────────────────────── */
+function updateObjects(myp){
+  // levers
+  for(const o of S.L.objs){
+    if(o.t==='l'){
+      const lx=o.x*T,ly=o.y*T,key=o.x+','+o.y;
+      const touched=myp.x+PW>lx&&myp.x<lx+T&&myp.y+PH>ly&&myp.y<ly+T;
+      if(touched&&!S._leverTouched[key]){
+        if(S.role==='host')toggleLever(key);
+        else send({t:'lever',id:key});
+        S._leverTouched[key]=true;
+      }
+      if(!touched)delete S._leverTouched[key];
+    }
+  }
+  // buttons (checked for both players every frame by host)
+  if(S.role==='host'){
+    const btnObjs=S.L.objs.filter(o=>o.t==='b');
+    const pressed={};
+    const needed={};
+    for(const o of btnObjs){
+      if(!pressed[o.g])pressed[o.g]=0;
+      if(!needed[o.g])needed[o.g]=0;
+      needed[o.g]++;
+      const bx=o.x*T,by=o.y*T;
+      const check=p=>p.x+PW>bx+2&&p.x<bx+T-2&&Math.abs((p.y+PH)-(by+T))<10;
+      if(check(S.P[S.me])||( S.P[S.other]&&S.P[S.other].seen&&check(S.P[S.other])))pressed[o.g]++;
+    }
+    for(const o of btnObjs){
+      S.gateOpen[o.g]=o.a?pressed[o.g]>=needed[o.g]:pressed[o.g]>0;
+    }
+  }
+}
+function toggleLever(key){
+  S.leverToggle[key]=!S.leverToggle[key];
+  for(const o of S.L.objs){
+    if(o.t==='l'&&(o.x+','+o.y)===key)S.gateOpen[o.g]=S.leverToggle[key];
+  }
+}
+function updateMovPlats(){
+  for(const pl of S.movPlats){
+    const dx=(pl.x2-pl.x1)*T,dy=(pl.y2-pl.y1)*T;
+    const len=Math.sqrt(dx*dx+dy*dy)||1;
+    pl.cx+=(pl.fwd?1:-1)*dx/len*pl.s;
+    pl.cy+=(pl.fwd?1:-1)*dy/len*pl.s;
+    const tx=pl.cx-pl.x1*T,ty2=pl.cy-pl.y1*T;
+    const prog=Math.sqrt(tx*tx+ty2*ty2);
+    if(prog>=len)pl.fwd=false;
+    if(prog<=0)pl.fwd=true;
+  }
+}
+function checkTraps(p,role){
+  const cl=Math.floor(p.x/T),cr=Math.floor((p.x+PW-1)/T);
+  const ct=Math.floor(p.y/T),cb=Math.floor((p.y+PH-1)/T);
+  for(let tx=cl;tx<=cr;tx++)for(let ty=ct;ty<=cb;ty++){
+    const c=tileAt(tx,ty);
+    if(c==='T'||(c==='Q'&&role==='light')||(c==='Z'&&role==='dark')){
+      if(S.role==='host'||S.role==='solo')doDeath();else send({t:'dead'});return;
+    }
+    if((c==='E'&&role==='light')||(c==='X'&&role==='dark')){
+      S.atExit[role]=true;
+      if(!S.atExitLatch[role]){S.atExitLatch[role]=true;send({t:'exit',role});}
+    }
+  }
+  if(p.y>GH*T+60){if(S.role==='host')doDeath();else send({t:'dead'});}
+}
+
+/* ── Main update ─────────────────────────────────────────────────────────── */
+let lastSync=0,lastState=0;
+function update(){
+  if(S.screen!=='game'||S.win||S.transitioning)return;
+  updateMovPlats();
+  const myp=S.P[S.me];
+  if(myp){updatePhysics(myp);updateObjects(myp);checkTraps(myp,S.me);}
+  const op=S.P[S.other];
+  if(op&&op.seen){op.x+=(op.tx-op.x)*0.28;op.y+=(op.ty-op.y)*0.28;}
+  const now=performance.now();
+  if(myp&&now-lastSync>33){send({t:'p',x:myp.x,y:myp.y,f:myp.face});lastSync=now;}
+  if(S.role==='host'&&now-lastState>100){
+    send({t:'st',go:S.gateOpen,lt:S.leverToggle,d:S.deaths,
+          mp:S.movPlats.map(p=>({x:p.cx,y:p.cy}))});lastState=now;
+  }
+  // In solo mode, reaching the light exit is enough to advance
+  if(S.role==='solo'&&S.atExitLatch.light&&!S.transitioning)nextLevel();
+  if(S.role!=='solo'&&S.atExitLatch.light&&S.atExitLatch.dark&&!S.transitioning)nextLevel();
+  S.atExit.light=S.atExit.dark=false;
+  updateHUD();
+}
+
+/* ── Render ──────────────────────────────────────────────────────────────── */
+const cv=$('cv'),ctx=cv.getContext('2d');
+let animT=0;
+function hexA(h,a){const r=parseInt(h.slice(1,3),16),g=parseInt(h.slice(3,5),16),b=parseInt(h.slice(5,7),16);return`rgba(${r},${g},${b},${a})`;}
+
+function render(){
+  animT+=0.04;
+  // gradient background
+  const bg=ctx.createLinearGradient(0,0,0,cv.height);
+  bg.addColorStop(0,'#06061a');bg.addColorStop(1,'#03030e');
+  ctx.fillStyle=bg;ctx.fillRect(0,0,cv.width,cv.height);
+  const L=S.L;if(!L)return;
+
+  // exit glow halos (behind everything)
+  const pulse=0.7+0.3*Math.sin(animT*2.5);
+  for(let ry=0;ry<GH;ry++)for(let rx=0;rx<GW;rx++){
+    const c=L.rows[ry][rx];
+    if(c!=='E'&&c!=='X')continue;
+    const px=rx*T+T/2,py=ry*T+T/2;
+    const col=c==='E'?'#ffd966':'#b265ff';
+    const gr=ctx.createRadialGradient(px,py,0,px,py,70*pulse);
+    gr.addColorStop(0,hexA(col,0.22*pulse));gr.addColorStop(1,'rgba(0,0,0,0)');
+    ctx.fillStyle=gr;ctx.fillRect(px-70,py-70,140,140);
+  }
+
+  // draw tiles
+  for(let ry=0;ry<GH;ry++)for(let rx=0;rx<GW;rx++){
+    const c=L.rows[ry][rx];const px=rx*T,py=ry*T;
+    if(c==='.')continue;
+    if(c==='#'){
+      // base fill – brighter than before
+      ctx.fillStyle='#141428';ctx.fillRect(px,py,T,T);
+      // inner subtle pattern
+      ctx.fillStyle='rgba(40,40,90,.4)';ctx.fillRect(px+1,py+1,T-2,T-2);
+      // bright grid lines
+      ctx.strokeStyle='#3a3a88';ctx.lineWidth=1;ctx.strokeRect(px+.5,py+.5,T-1,T-1);
+      // neon top & left edge highlights
+      ctx.fillStyle='rgba(100,100,200,.7)';ctx.fillRect(px,py,T,2);
+      ctx.fillStyle='rgba(80,80,180,.4)';ctx.fillRect(px,py,2,T);
+    }else if(c==='W'){
+      ctx.fillStyle='#201500';ctx.fillRect(px,py,T,T);
+      ctx.strokeStyle='#c8a030';ctx.lineWidth=1.5;ctx.strokeRect(px+.5,py+.5,T-1,T-1);
+      // gold glow top stripe
+      ctx.fillStyle='rgba(220,170,40,.9)';ctx.fillRect(px,py,T,3);
+      ctx.shadowBlur=8;ctx.shadowColor='#ffd966';
+      ctx.fillStyle='rgba(255,210,80,.15)';ctx.fillRect(px,py,T,T);
+      ctx.shadowBlur=0;
+    }else if(c==='V'){
+      ctx.fillStyle='#0e0020';ctx.fillRect(px,py,T,T);
+      ctx.strokeStyle='#8040c0';ctx.lineWidth=1.5;ctx.strokeRect(px+.5,py+.5,T-1,T-1);
+      ctx.fillStyle='rgba(160,70,230,.9)';ctx.fillRect(px,py,T,3);
+      ctx.shadowBlur=8;ctx.shadowColor='#b265ff';
+      ctx.fillStyle='rgba(160,80,255,.15)';ctx.fillRect(px,py,T,T);
+      ctx.shadowBlur=0;
+    }else if(c==='T'||c==='Q'||c==='Z'){
+      const col=c==='T'?'#ff2222':c==='Q'?'#ff7700':'#2299ff';
+      const bg2=c==='T'?'rgba(50,0,0,.7)':c==='Q'?'rgba(50,20,0,.7)':'rgba(0,15,50,.7)';
+      ctx.fillStyle=bg2;ctx.fillRect(px,py,T,T);
+      ctx.fillStyle=col;
+      for(let i=0;i<3;i++){
+        ctx.beginPath();
+        ctx.moveTo(px+i*(T/3),py+T);
+        ctx.lineTo(px+T/6+i*(T/3),py+5);
+        ctx.lineTo(px+T/3+i*(T/3),py+T);
+        ctx.closePath();ctx.fill();
+      }
+      ctx.strokeStyle=col;ctx.lineWidth=0.5;ctx.strokeRect(px+.5,py+.5,T-1,T-1);
+    }else if(c==='E'){
+      // Light exit – gold door, 2×T tall for visual impact
+      const gw=ctx.createLinearGradient(px,py,px,py+T);
+      gw.addColorStop(0,'#2a1a00');gw.addColorStop(1,'#1a0e00');
+      ctx.fillStyle=gw;ctx.fillRect(px,py,T,T);
+      ctx.shadowBlur=20+8*pulse;ctx.shadowColor='#ffd966';
+      ctx.strokeStyle='#ffd966';ctx.lineWidth=2.5;ctx.strokeRect(px+1,py+1,T-2,T-2);
+      ctx.fillStyle=`rgba(255,210,80,${0.08+0.06*pulse})`;ctx.fillRect(px,py,T,T);
+      ctx.fillStyle='#ffe97a';ctx.font='bold 22px serif';
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('⚜',px+T/2,py+T/2);
+      ctx.shadowBlur=0;
+    }else if(c==='X'){
+      // Dark exit – purple door
+      const gv=ctx.createLinearGradient(px,py,px,py+T);
+      gv.addColorStop(0,'#160028');gv.addColorStop(1,'#0a0016');
+      ctx.fillStyle=gv;ctx.fillRect(px,py,T,T);
+      ctx.shadowBlur=20+8*pulse;ctx.shadowColor='#b265ff';
+      ctx.strokeStyle='#b265ff';ctx.lineWidth=2.5;ctx.strokeRect(px+1,py+1,T-2,T-2);
+      ctx.fillStyle=`rgba(160,80,255,${0.08+0.06*pulse})`;ctx.fillRect(px,py,T,T);
+      ctx.fillStyle='#cc88ff';ctx.font='bold 20px serif';
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('◆',px+T/2,py+T/2);
+      ctx.shadowBlur=0;
+    }else if(isGate(c)){
+      const open=S.gateOpen[c];
+      if(!open){
+        ctx.fillStyle='#0c1a30';ctx.fillRect(px,py,T,T);
+        ctx.strokeStyle='#2a6ab0';ctx.lineWidth=1.5;ctx.strokeRect(px+.5,py+.5,T-1,T-1);
+        ctx.strokeStyle='rgba(50,120,200,.5)';ctx.lineWidth=1;
+        ctx.beginPath();ctx.moveTo(px+4,py+4);ctx.lineTo(px+T-4,py+T-4);ctx.stroke();
+        ctx.beginPath();ctx.moveTo(px+T-4,py+4);ctx.lineTo(px+4,py+T-4);ctx.stroke();
+      }else{
+        ctx.setLineDash([3,5]);ctx.strokeStyle='rgba(50,120,200,.25)';ctx.lineWidth=1;
+        ctx.strokeRect(px+.5,py+.5,T-1,T-1);ctx.setLineDash([]);
+      }
+    }
+  }
+
+  // objects: buttons and levers
+  for(const o of L.objs){
+    const px=o.x*T,py=o.y*T;
+    if(o.t==='b'){
+      const open=S.gateOpen[o.g];
+      const bc=open?'#40dd40':'#ddaa20';
+      ctx.fillStyle=open?'rgba(60,220,60,.35)':'rgba(220,170,30,.25)';
+      ctx.fillRect(px+2,py+T-10,T-4,10);
+      ctx.shadowBlur=open?10:4;ctx.shadowColor=bc;
+      ctx.strokeStyle=bc;ctx.lineWidth=2;ctx.strokeRect(px+2,py+T-10,T-4,10);
+      ctx.fillStyle=bc;ctx.font='bold 13px sans-serif';
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('⊙',px+T/2,py+T-5);
+      ctx.shadowBlur=0;
+    }
+    if(o.t==='l'){
+      const on=S.leverToggle[o.x+','+o.y];
+      const lc=on?'#40dd40':'#ff7050';
+      ctx.fillStyle=on?'rgba(60,220,60,.2)':'rgba(220,80,40,.2)';
+      ctx.fillRect(px+4,py+3,T-8,T-6);
+      ctx.shadowBlur=on?10:5;ctx.shadowColor=lc;
+      ctx.strokeStyle=lc;ctx.lineWidth=2;ctx.strokeRect(px+4,py+3,T-8,T-6);
+      ctx.fillStyle=lc;ctx.font='bold 16px sans-serif';
+      ctx.textAlign='center';ctx.textBaseline='middle';
+      ctx.fillText('⊗',px+T/2,py+T/2);
+      ctx.shadowBlur=0;
+    }
+  }
+
+  // moving platforms – with glow top
+  for(const pl of S.movPlats){
+    const pg=ctx.createLinearGradient(pl.cx,pl.cy,pl.cx,pl.cy+pl.h);
+    pg.addColorStop(0,'#3050a0');pg.addColorStop(1,'#182050');
+    ctx.fillStyle=pg;ctx.fillRect(pl.cx,pl.cy,pl.w,pl.h);
+    ctx.shadowBlur=10;ctx.shadowColor='#5070ff';
+    ctx.strokeStyle='#5070ff';ctx.lineWidth=1.5;ctx.strokeRect(pl.cx+.5,pl.cy+.5,pl.w-1,pl.h-1);
+    ctx.fillStyle='rgba(100,140,255,.8)';ctx.fillRect(pl.cx,pl.cy,pl.w,3);
+    ctx.shadowBlur=0;
+  }
+
+  // players
+  drawPlayer(S.P['light'],'light');
+  drawPlayer(S.P['dark'],'dark');
+
+  // hint at bottom
+  if($('bigMsg').style.display==='none'&&L.hint){
+    ctx.fillStyle='rgba(100,100,160,.7)';ctx.font='12px sans-serif';
+    ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText(L.hint,cv.width/2,cv.height-4);
+  }
+}
+
+function drawPlayer(p,role){
+  if(!p)return;
+  const isL=role==='light';
+  const glow=isL?'#ffd966':'#b265ff';
+  const cx=p.x+PW/2,cy=p.y+PH/2;
+
+  // outer aura (animated)
+  const aSize=36+4*Math.sin(animT*3+(isL?0:Math.PI));
+  const gr=ctx.createRadialGradient(cx,cy,0,cx,cy,aSize);
+  gr.addColorStop(0,hexA(glow,isL?.20:.18));gr.addColorStop(1,'rgba(0,0,0,0)');
+  ctx.fillStyle=gr;ctx.fillRect(cx-aSize,cy-aSize,aSize*2,aSize*2);
+
+  // drop shadow
+  ctx.fillStyle='rgba(0,0,0,.35)';rRect(ctx,p.x+4,p.y+4,PW,PH,5);ctx.fill();
+
+  // body gradient
+  const bdg=ctx.createLinearGradient(p.x,p.y,p.x,p.y+PH);
+  if(isL){bdg.addColorStop(0,'#fffbe0');bdg.addColorStop(0.5,'#ffd966');bdg.addColorStop(1,'#c8900a');}
+  else   {bdg.addColorStop(0,'#e0c0ff');bdg.addColorStop(0.5,'#9040e0');bdg.addColorStop(1,'#3a006a');}
+  ctx.fillStyle=bdg;rRect(ctx,p.x,p.y,PW,PH,5);ctx.fill();
+
+  // border glow
+  ctx.shadowBlur=16;ctx.shadowColor=glow;
+  ctx.strokeStyle=glow;ctx.lineWidth=1.8;
+  rRect(ctx,p.x,p.y,PW,PH,5);ctx.stroke();
+  ctx.shadowBlur=0;
+
+  // head circle
+  const hx=cx,hy=p.y+8;
+  ctx.fillStyle=isL?'#fff8c0':'#d8a8ff';
+  ctx.shadowBlur=8;ctx.shadowColor=glow;
+  ctx.beginPath();ctx.arc(hx,hy,6,0,Math.PI*2);ctx.fill();
+  ctx.shadowBlur=0;
+
+  // eyes
+  const ex=p.face>0?hx+3:hx-3;
+  ctx.fillStyle=isL?'#2a1800':'#ffffff';
+  ctx.beginPath();ctx.arc(ex,hy,2.2,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle=glow;ctx.beginPath();ctx.arc(ex,hy,1,0,Math.PI*2);ctx.fill();
+
+  // "you" indicator
+  if(role===S.me){
+    ctx.shadowBlur=10;ctx.shadowColor=glow;ctx.fillStyle=glow;
+    ctx.font='bold 12px serif';ctx.textAlign='center';ctx.textBaseline='bottom';
+    ctx.fillText(isL?'⚜':'◆',cx,p.y-1);ctx.shadowBlur=0;
+  }
+}
+function rRect(c,x,y,w,h,r){
+  c.beginPath();c.moveTo(x+r,y);c.lineTo(x+w-r,y);c.arcTo(x+w,y,x+w,y+r,r);
+  c.lineTo(x+w,y+h-r);c.arcTo(x+w,y+h,x+w-r,y+h,r);c.lineTo(x+r,y+h);
+  c.arcTo(x,y+h,x,y+h-r,r);c.lineTo(x,y+r);c.arcTo(x,y,x+r,y,r);c.closePath();
+}
+
+/* ── Main loop ───────────────────────────────────────────────────────────── */
+let lastT=0;
+function loop(ts=0){
+  requestAnimationFrame(loop);
+  lastT=ts;
+  if(S.screen!=='game')return;
+  update();render();
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
