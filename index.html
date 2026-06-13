@@ -403,14 +403,22 @@ addEventListener('keyup',e=>{
 /* ── Network ─────────────────────────────────────────────────────────────── */
 const $=id=>document.getElementById(id);
 const randCode=()=>{const a='ABCDEFGHJKMNPQRSTUVWXYZ23456789';let s='';for(let i=0;i<5;i++)s+=a[Math.random()*a.length|0];return s;};
-const PFX='tmsv3-';
+const PFX='tmsv4-';
+// Reliable ICE servers: Google STUN + Open Relay TURN (free, no account needed)
+const ICE={config:{iceServers:[
+  {urls:'stun:stun.l.google.com:19302'},
+  {urls:'stun:stun1.l.google.com:19302'},
+  {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
+  {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
+  {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'},
+]}};
 function setStatus(h){$('status').innerHTML=h;}
 function send(m){if(S.conn&&S.conn.open)try{S.conn.send(m);}catch(_){}}
 
 $('btnHost').onclick=()=>{
   const code=randCode();
   setStatus('Создаю комнату…');
-  const peer=new Peer(PFX+code.toLowerCase());
+  const peer=new Peer(PFX+code.toLowerCase(),ICE);
   S.peer=peer;S.role='host';S.me='light';S.other='dark';
   peer.on('open',()=>{
     setStatus(`Код комнаты:<br><span id="roomCode">${code}</span><br>Отправь второму игроку и жди…`);
@@ -430,12 +438,12 @@ function joinGame(){
   const code=$('codeInput').value.trim().toLowerCase();
   if(code.length<4){setStatus('Введи 5-значный код.');return;}
   setStatus('Подключаюсь…');
-  const peer=new Peer();
+  const peer=new Peer(ICE);
   S.peer=peer;S.role='guest';S.me='dark';S.other='light';
   peer.on('open',()=>{
-    const c=peer.connect(PFX+code,{reliable:true});
+    const c=peer.connect(PFX+code,{reliable:true,config:ICE.config});
     bindConn(c);
-    setTimeout(()=>{if(!S.connected)setStatus('Не удалось. Проверь код.');},9000);
+    setTimeout(()=>{if(!S.connected)setStatus('Не удалось. Проверь код.');},15000);
   });
   peer.on('error',e=>setStatus('Ошибка: '+e.type));
 }
